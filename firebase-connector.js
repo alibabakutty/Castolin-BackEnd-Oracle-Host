@@ -5,7 +5,6 @@ import admin from 'firebase-admin';
 import serviceAccount from "./config/serviceAccountKey.json" with { type: "json" }; 
 
 const app = express(); 
-// app.use(cors());
 
 // ✅ PROPER CORS CONFIGURATION FOR RAILWAY
 const corsOptions = {
@@ -18,7 +17,6 @@ const corsOptions = {
       'http://localhost:5173', // Vite dev server
       'http://localhost:3000', // React dev server
       process.env.CLIENT_URL, // From environment variable
-      // Add more origins as needed
     ].filter(Boolean); // Remove any undefined values
 
     // Check if the origin is in allowed list
