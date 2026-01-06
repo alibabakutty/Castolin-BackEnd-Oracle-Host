@@ -1,0 +1,3 @@
+WALLET_LOCATION = (SOURCE = (METHOD = file) (METHOD_DATA = (DIRECTORY="E:\\Castoline_Project With Oracle-Host\\Castolin-BackEnd-Oracle-Host\\Wallet_MYFREEDB")))
+
+SSL_SERVER_DN_MATCH=yes
