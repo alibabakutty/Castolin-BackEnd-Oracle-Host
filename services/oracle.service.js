@@ -33,26 +33,28 @@ class OracleService {
   }
 
   async executeTransaction(operations) {
-    let connection;
-    try {
-      connection = await this.pool.getConnection();
+  let connection;
+  try {
+    connection = await this.pool.getConnection();
 
-      const results = [];
-      for (const op of operations) {
-        results.push(
-          await connection.execute(op.sql, op.binds, op.options)
-        );
+    const results = [];
+    for (const op of operations) {
+      if (op.options) {
+        results.push(await connection.execute(op.sql, op.binds, op.options));
+      } else {
+        results.push(await connection.execute(op.sql, op.binds));
       }
-
-      await connection.commit();
-      return results;
-    } catch (error) {
-      if (connection) await connection.rollback();
-      throw error;
-    } finally {
-      if (connection) await connection.close();
     }
+
+    await connection.commit();
+    return results;
+  } catch (error) {
+    if (connection) await connection.rollback();
+    throw error;
+  } finally {
+    if (connection) await connection.close();
   }
+}
 }
 
 export default new OracleService();

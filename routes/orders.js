@@ -1,12 +1,13 @@
 import express from 'express';
-import  OracleService  from '../services/oracle.service.js';
-import { toOracleDate, generateOrderNumber } from '../utils/helpers.js';
+import OracleService from '../services/oracle.service.js';
+import { toOracleDate } from '../utils/helpers.js';
+import oracledb from 'oracledb';
 
 const router = express.Router();
 const oracleService = OracleService;
 
 // Get all orders
-router.get('/', async (req, res) => {
+router.get('/orders', async (req, res) => {
   try {
     const result = await oracleService.executeQuery('SELECT * FROM orders');
 
@@ -25,42 +26,8 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Get specific order
-router.get('/:id', async (req, res) => {
-  const orderId = req.params.id;
-
-  if (!orderId) {
-    return res.status(400).json({
-      success: false,
-      error: 'Order ID is required',
-    });
-  }
-
-  try {
-    const result = await oracleService.executeQuery(`SELECT * FROM orders WHERE id = :1`, [orderId]);
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: 'Order not found',
-      });
-    }
-
-    res.json({
-      success: true,
-      data: result.rows[0],
-    });
-  } catch (error) {
-    console.error('Database query error:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Internal server error',
-    });
-  }
-});
-
-// Get orders by order number
-router.get('/number/:order_no', async (req, res) => {
+// Get Orders by Order Number
+router.get('/orders-by-number/:order_no', async (req, res) => {
   const { order_no } = req.params;
   const { created_at } = req.query; // optional filter
 
@@ -74,6 +41,7 @@ router.get('/number/:order_no', async (req, res) => {
   let sql = 'SELECT * FROM orders WHERE order_no = :1';
   const params = [order_no];
 
+  // Optional created_at filter
   if (created_at) {
     sql += ' AND created_at = :2';
     params.push(created_at);
@@ -85,7 +53,7 @@ router.get('/number/:order_no', async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        error: 'No orders found',
+        error: 'Order not found',
       });
     }
 
@@ -104,7 +72,7 @@ router.get('/number/:order_no', async (req, res) => {
 });
 
 // Get next order number
-router.get('/next-order-number', async (req, res) => {
+router.get('api/orders/next-order-number', async (req, res) => {
   try {
     const result = await oracleService.executeQuery(
       `SELECT order_no FROM orders 
@@ -112,12 +80,30 @@ router.get('/next-order-number', async (req, res) => {
        ORDER BY created_at DESC FETCH FIRST 1 ROWS ONLY`,
     );
 
-    const latestOrderNo = result.rows.length > 0 ? result.rows[0].order_no : null;
-    const orderNumber = generateOrderNumber(latestOrderNo);
+    let nextSequence = '0001';
+    const today = new Date();
+    const day = String(today.getDate()).padStart(2, '0');
+    const month = String(today.getMonth() + 1).padStart(2, '0');
+    const year = today.getFullYear().toString().slice(-2);
+
+    if (result.rows.length > 0 && result.rows[0].order_no) {
+      const orderNo = result.rows[0].order_no;
+      const parts = orderNo.split('-');
+
+      if (parts.length >= 5) {
+        const lastDate = `${parts[1]}-${parts[2]}-${parts[3]}`;
+        const currentDate = `${day}-${month}-${year}`;
+
+        if (lastDate === currentDate) {
+          const lastSequence = parseInt(parts[4]) || 0;
+          nextSequence = (lastSequence + 1).toString().padStart(4, '0');
+        }
+      }
+    }
 
     res.json({
       success: true,
-      orderNumber,
+      orderNumber: `SQ-${day}-${month}-${year}-${nextSequence}`,
     });
   } catch (error) {
     console.error('Next order number error:', error);
@@ -129,9 +115,10 @@ router.get('/next-order-number', async (req, res) => {
 });
 
 // Create orders (batch insert)
-router.post('/', async (req, res) => {
+router.post('/orders', async (req, res) => {
   const data = req.body;
 
+  // Validate request body
   if (!Array.isArray(data) || data.length === 0) {
     return res.status(400).json({
       success: false,
@@ -139,63 +126,91 @@ router.post('/', async (req, res) => {
     });
   }
 
-  const operations = data.map(item => ({
-    sql: `
-      INSERT INTO orders 
-      (voucher_type, order_no, order_date, status, customer_code, executive, role, 
-       customer_name, item_code, item_name, hsn, gst, sgst, cgst, igst, delivery_date, 
-       delivery_mode, transporter_name, quantity, uom, rate, amount, net_rate, gross_amount, 
-       disc_percentage, disc_amount, spl_disc_percentage, spl_disc_amount, total_quantity, 
-       total_amount_without_tax, total_cgst_amount, total_sgst_amount, total_igst_amount, 
-       total_amount, remarks) 
-      VALUES (:1, :2, TO_DATE(:3, 'YYYY-MM-DD'), :4, :5, :6, :7, :8, :9, :10, :11, :12, :13, 
-              :14, :15, TO_DATE(:16, 'YYYY-MM-DD'), :17, :18, :19, :20, :21, :22, :23, :24, 
-              :25, :26, :27, :28, :29, :30, :31, :32, :33, :34, :35)`,
-    binds: [
-      item.voucher_type,
-      item.order_no,
-      item.date,
-      item.status,
-      item.customer_code,
-      item.executive,
-      item.role,
-      item.customer_name,
-      item.item_code,
-      item.item_name,
-      item.hsn,
-      String(item.gst).replace(/\s*%/, ''),
-      item.sgst,
-      item.cgst,
-      item.igst,
-      item.delivery_date,
-      item.delivery_mode,
-      item.transporter_name,
-      item.quantity,
-      item.uom,
-      item.rate,
-      item.amount,
-      item.net_rate,
-      item.gross_amount,
-      item.disc_percentage,
-      item.disc_amount,
-      item.spl_disc_percentage,
-      item.spl_disc_amount,
-      item.total_quantity ?? 0.0,
-      item.total_amount_without_tax ?? 0.0,
-      item.total_cgst_amount ?? 0.0,
-      item.total_sgst_amount ?? 0.0,
-      item.total_igst_amount ?? 0.0,
-      item.total_amount ?? 0.0,
-      item.remarks ?? '',
-    ]
-  }));
-
   try {
-    await oracleService.executeTransaction(operations);
+    const operations = data.map((item, index) => {
+      // Normalize and validate required fields
+      const order_no = item.order_no?.trim();
+      const order_date = toOracleDate(item.date) || new Date();
+      const delivery_date = toOracleDate(item.delivery_date) || order_date; // default to order_date
+      if (!order_no) throw new Error(`Order number is required for item at index ${index}`);
+      if (!delivery_date) throw new Error(`Delivery date is required for order ${order_no}`);
+
+      return {
+        sql: `
+          INSERT INTO orders (
+            voucher_type, order_no, order_date, status, customer_code, executive, role,
+            customer_name, item_code, item_name, hsn, gst, sgst, cgst, igst,
+            delivery_date, delivery_mode, transporter_name, quantity, uom,
+            rate, amount, net_rate, gross_amount, disc_percentage, disc_amount,
+            spl_disc_percentage, spl_disc_amount, total_quantity,
+            total_amount_without_tax, total_cgst_amount, total_sgst_amount,
+            total_igst_amount, total_amount, remarks
+          )
+          VALUES (
+            :voucher_type, :order_no, :order_date, :status,
+            :customer_code, :executive, :role, :customer_name, :item_code,
+            :item_name, :hsn, :gst, :sgst, :cgst, :igst,
+            :delivery_date, :delivery_mode, :transporter_name,
+            :quantity, :uom, :rate, :amount, :net_rate, :gross_amount,
+            :disc_percentage, :disc_amount, :spl_disc_percentage,
+            :spl_disc_amount, :total_quantity, :total_amount_without_tax,
+            :total_cgst_amount, :total_sgst_amount, :total_igst_amount,
+            :total_amount, :remarks
+          )
+          RETURNING id INTO :id
+        `,
+        binds: {
+          voucher_type: item.voucher_type || 'Distributor Order-Web Based',
+          order_no,
+          order_date,
+          status: item.status || 'pending',
+          customer_code: item.customer_code || '',
+          executive: item.executive || '',
+          role: item.role || 'distributor',
+          customer_name: item.customer_name || '',
+          item_code: item.item_code || '',
+          item_name: item.item_name || '',
+          hsn: item.hsn || '',
+          gst: item.gst != null ? String(item.gst).replace(/\s*%/, '') : 0,
+          sgst: item.sgst ?? 0,
+          cgst: item.cgst ?? 0,
+          igst: item.igst ?? 0,
+          delivery_date,
+          delivery_mode: item.delivery_mode || '',
+          transporter_name: item.transporter_name || '',
+          quantity: item.quantity ?? 0,
+          uom: item.uom || '',
+          rate: item.rate ?? 0,
+          amount: item.amount ?? 0,
+          net_rate: item.net_rate ?? 0,
+          gross_amount: item.gross_amount ?? 0,
+          disc_percentage: item.disc_percentage ?? 0,
+          disc_amount: item.disc_amount ?? 0,
+          spl_disc_percentage: item.spl_disc_percentage ?? 0,
+          spl_disc_amount: item.spl_disc_amount ?? 0,
+          total_quantity: item.total_quantity ?? 0,
+          total_amount_without_tax: item.total_amount_without_tax ?? 0,
+          total_cgst_amount: item.total_cgst_amount ?? 0,
+          total_sgst_amount: item.total_sgst_amount ?? 0,
+          total_igst_amount: item.total_igst_amount ?? 0,
+          total_amount: item.total_amount ?? 0,
+          remarks: item.remarks || '',
+          id: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER },
+        },
+      };
+    });
+
+    // Execute all inserts in a single transaction
+    const results = await oracleService.executeTransaction(operations);
+
+    // Extract all generated IDs from RETURNING
+    const insertedIds = results.map(r => r.outBinds?.id?.[0]);
+
     res.json({
       success: true,
       message: 'Orders inserted successfully',
       insertedCount: data.length,
+      insertedIds,
     });
   } catch (error) {
     console.error('Insert orders error:', error);
@@ -207,7 +222,7 @@ router.post('/', async (req, res) => {
 });
 
 // Update orders by order number
-router.put('/number/:order_no', async (req, res) => {
+router.put('/orders-by-number/:order_no', async (req, res) => {
   const { order_no } = req.params;
   const allItems = [...req.body].sort((a, b) => (a.id || 0) - (b.id || 0));
 
@@ -232,25 +247,47 @@ router.put('/number/:order_no', async (req, res) => {
       const binds = ids.map((_, i) => `:${i + 1}`).join(',');
       operations.push({
         sql: `DELETE FROM orders WHERE id IN (${binds}) AND order_no = :${ids.length + 1}`,
-        binds: [...ids, order_no]
+        binds: [...ids, order_no],
       });
     }
 
     // Update operations
     const allowedFields = [
-      'status','disc_percentage','disc_amount','spl_disc_percentage','spl_disc_amount',
-      'net_rate','gross_amount','quantity','gst','sgst','cgst','igst',
-      'hsn','rate','amount','uom','item_code','item_name',
-      'delivery_date','delivery_mode','transporter_name',
-      'total_quantity','total_amount','total_amount_without_tax',
-      'total_sgst_amount','total_cgst_amount','total_igst_amount',
-      'remarks','order_date'
+      'status',
+      'disc_percentage',
+      'disc_amount',
+      'spl_disc_percentage',
+      'spl_disc_amount',
+      'net_rate',
+      'gross_amount',
+      'quantity',
+      'gst',
+      'sgst',
+      'cgst',
+      'igst',
+      'hsn',
+      'rate',
+      'amount',
+      'uom',
+      'item_code',
+      'item_name',
+      'delivery_date',
+      'delivery_mode',
+      'transporter_name',
+      'total_quantity',
+      'total_amount',
+      'total_amount_without_tax',
+      'total_sgst_amount',
+      'total_cgst_amount',
+      'total_igst_amount',
+      'remarks',
+      'order_date',
     ];
 
     for (const row of itemsToUpdate) {
       const { id, _deleted, ...fields } = row;
       const filtered = Object.fromEntries(
-        Object.entries(fields).filter(([k]) => allowedFields.includes(k))
+        Object.entries(fields).filter(([k]) => allowedFields.includes(k)),
       );
 
       if (!Object.keys(filtered).length) continue;
@@ -266,8 +303,10 @@ router.put('/number/:order_no', async (req, res) => {
       values.push(id, order_no);
 
       operations.push({
-        sql: `UPDATE orders SET ${setClause} WHERE id = :${values.length - 1} AND order_no = :${values.length}`,
-        binds: values
+        sql: `UPDATE orders SET ${setClause} WHERE id = :${values.length - 1} AND order_no = :${
+          values.length
+        }`,
+        binds: values,
       });
     }
 
@@ -308,7 +347,7 @@ router.put('/number/:order_no', async (req, res) => {
         total_sgst_amount: item.total_sgst_amount || 0,
         total_cgst_amount: item.total_cgst_amount || 0,
         total_igst_amount: item.total_igst_amount || 0,
-        remarks: item.remarks || ''
+        remarks: item.remarks || '',
       };
 
       const cols = Object.keys(insertData);
@@ -317,7 +356,7 @@ router.put('/number/:order_no', async (req, res) => {
 
       operations.push({
         sql: `INSERT INTO orders (${cols.join(',')}) VALUES (${binds})`,
-        binds: vals
+        binds: vals,
       });
     }
 
@@ -326,7 +365,7 @@ router.put('/number/:order_no', async (req, res) => {
     // Get updated orders
     const result = await oracleService.executeQuery(
       'SELECT * FROM orders WHERE order_no = :1 ORDER BY id',
-      [order_no]
+      [order_no],
     );
 
     res.json({
@@ -335,10 +374,9 @@ router.put('/number/:order_no', async (req, res) => {
       operations: {
         inserted: itemsToInsert.length,
         updated: itemsToUpdate.length,
-        deleted: itemsToDelete.length
-      }
+        deleted: itemsToDelete.length,
+      },
     });
-
   } catch (error) {
     console.error('❌ Transaction failed:', error);
     res.status(500).json({ success: false, error: error.message });

@@ -8,7 +8,7 @@ import authRoutes from './routes/auth.js';
 import adminRoutes from './routes/admin.js';
 import customerRoutes from './routes/customers.js';
 import orderRoutes from './routes/orders.js';
-import stockRoutes from './routes/stock.js';
+import stockRoutes from './routes/stock_item.js';
 
 export const createApp = () => {
   const app = express();

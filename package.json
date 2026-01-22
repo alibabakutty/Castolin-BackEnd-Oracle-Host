@@ -2,11 +2,11 @@
   "name": "backend",
   "version": "1.0.0",
   "description": "",
-  "main": "firebase-connector.js",
+  "main": "server.js",
   "scripts": {
     "test": "set NODE_ENV=test && node --experimental-vm-modules node_modules/jest/bin/jest.js",
-    "start": "node firebase-connector.js",
-    "dev": "node firebase-connector.js"
+    "start": "node server.js",
+    "dev": "node server.js"
   },
   "keywords": [],
   "author": "",
@@ -23,7 +23,6 @@
     "xml2js": "^0.6.2"
   },
   "devDependencies": {
-    "jest": "^30.2.0",
-    "supertest": "^7.2.2"
+    "@playwright/test": "^1.57.0"
   }
 }
